@@ -1147,6 +1147,7 @@ export async function initializeDatabase(): Promise<void> {
       WHERE NOT EXISTS (
         SELECT 1 FROM configuracion_empresa ce WHERE ce.tenant_id = t.id
       )
+      ON CONFLICT (tenant_id) DO NOTHING
     `);
 
     // configuracion_tema — remover singleton id=1, convertir a por-tenant

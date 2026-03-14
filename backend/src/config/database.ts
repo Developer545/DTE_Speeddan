@@ -814,7 +814,9 @@ export async function initializeDatabase(): Promise<void> {
       );
     `);
     await client.query(`
-      INSERT INTO configuracion_tema DEFAULT VALUES ON CONFLICT DO NOTHING;
+      INSERT INTO configuracion_tema (accent, accent_text, page_bg, card_bg, sidebar_bg)
+      SELECT '#1677ff', '#ffffff', '#f5f5f5', '#ffffff', '#ffffff'
+      WHERE NOT EXISTS (SELECT 1 FROM configuracion_tema);
     `);
     // Migraciones: ampliar columnas y agregar glass_blur
     await client.query(`ALTER TABLE configuracion_tema ALTER COLUMN accent      TYPE TEXT`);
@@ -1166,7 +1168,24 @@ export async function initializeDatabase(): Promise<void> {
 
     // configuracion_tema — remover singleton id=1, convertir a por-tenant
     await client.query(`ALTER TABLE configuracion_tema ADD COLUMN IF NOT EXISTS tenant_id INT REFERENCES tenants(id);`);
-    await client.query(`UPDATE configuracion_tema SET tenant_id = 1 WHERE tenant_id IS NULL;`);
+    // Paso A: Si ya existe tenant_id=1, borrar filas NULL huérfanas
+    await client.query(`
+      DELETE FROM configuracion_tema
+      WHERE tenant_id IS NULL
+        AND EXISTS (SELECT 1 FROM configuracion_tema WHERE tenant_id = 1)
+    `);
+    // Paso B: Si hay múltiples filas NULL, eliminar duplicados (dejar solo la de menor id)
+    await client.query(`
+      DELETE FROM configuracion_tema
+      WHERE tenant_id IS NULL
+        AND id != (SELECT MIN(id) FROM configuracion_tema WHERE tenant_id IS NULL)
+    `);
+    // Paso C: Asignar tenant_id=1 al único NULL restante (solo si no existe ya tenant_id=1)
+    await client.query(`
+      UPDATE configuracion_tema SET tenant_id = 1
+      WHERE tenant_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM configuracion_tema WHERE tenant_id = 1)
+    `);
     await client.query(`ALTER TABLE configuracion_tema DROP CONSTRAINT IF EXISTS configuracion_tema_id_check;`);
     await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_conf_tema_tenant ON configuracion_tema (tenant_id);`);
 

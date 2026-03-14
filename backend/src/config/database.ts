@@ -28,6 +28,33 @@ export const pool = new Pool({
 export async function initializeDatabase(): Promise<void> {
   const client = await pool.connect();
   try {
+    // Compatible Prisma 7: @updatedAt genera NOT NULL sin DEFAULT.
+    // SET DEFAULT NOW() es idempotente y seguro de repetir.
+    await client.query(`
+      ALTER TABLE IF EXISTS superadmin_users      ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS planes                ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS tenants               ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS tenant_pagos          ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS tenant_api_mh         ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS tenant_firma          ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS configuracion_empresa ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS configuracion_tema    ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS configuracion_api_mh  ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS configuracion_firma   ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS clientes              ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS proveedores           ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS categorias            ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS empleados             ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS productos             ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS compras               ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS inventario            ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS sucursales            ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS puntos_venta          ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS numeros_dte           ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS facturas              ALTER COLUMN updated_at SET DEFAULT NOW();
+      ALTER TABLE IF EXISTS usuarios              ALTER COLUMN updated_at SET DEFAULT NOW();
+    `);
+
     // ── Tabla clientes ────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS clientes (

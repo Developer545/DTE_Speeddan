@@ -896,16 +896,9 @@ export async function initializeDatabase(): Promise<void> {
         created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-    // Garantizar constraint UNIQUE en nombre para tablas ya existentes
+    // Garantizar índice UNIQUE en nombre (idempotente via IF NOT EXISTS)
     await client.query(`
-      DO $$ BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM pg_constraint
-          WHERE conrelid = 'planes'::regclass AND contype = 'u' AND conname = 'planes_nombre_key'
-        ) THEN
-          ALTER TABLE planes ADD CONSTRAINT planes_nombre_key UNIQUE (nombre);
-        END IF;
-      END $$;
+      CREATE UNIQUE INDEX IF NOT EXISTS planes_nombre_key ON planes (nombre);
     `);
     // Planes iniciales
     await client.query(`

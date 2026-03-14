@@ -31,7 +31,7 @@ export default function LoginPage() {
   const navigate        = useNavigate();
 
   const [step,         setStep]         = useState<Step>('empresa');
-  const [slug,         setSlug]         = useState('');
+  const [slug,         setSlug]         = useState(() => localStorage.getItem('erp_last_tenant') ?? '');
   const [tenant,       setTenant]       = useState<TenantPublicInfo | null>(null);
   const [username,     setUsername]     = useState('');
   const [password,     setPassword]     = useState('');
@@ -77,6 +77,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await login(username.trim(), password, slug.trim().toLowerCase());
+      localStorage.setItem('erp_last_tenant', slug.trim().toLowerCase());
     } catch (err: any) {
       setError(err.message || 'Credenciales inválidas');
     } finally {

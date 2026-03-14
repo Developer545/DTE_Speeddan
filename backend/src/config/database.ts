@@ -361,8 +361,8 @@ export async function initializeDatabase(): Promise<void> {
     `);
     // Sucursal principal por defecto
     await client.query(`
-      INSERT INTO sucursales (id, nombre, codigo)
-      VALUES (1, 'Casa Matriz', 'M001')
+      INSERT INTO sucursales (id, nombre, codigo, updated_at)
+      VALUES (1, 'Casa Matriz', 'M001', NOW())
       ON CONFLICT (id) DO NOTHING;
     `);
     // Resincronizar secuencia para evitar colisión al crear nuevas sucursales
@@ -395,8 +395,8 @@ export async function initializeDatabase(): Promise<void> {
     `);
     // Punto de venta principal por defecto
     await client.query(`
-      INSERT INTO puntos_venta (id, sucursal_id, nombre, codigo)
-      VALUES (1, 1, 'Caja Principal', 'P001')
+      INSERT INTO puntos_venta (id, sucursal_id, nombre, codigo, updated_at)
+      VALUES (1, 1, 'Caja Principal', 'P001', NOW())
       ON CONFLICT (id) DO NOTHING;
     `);
     // Resincronizar la secuencia para que el próximo INSERT auto-generado

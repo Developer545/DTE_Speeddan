@@ -37,6 +37,9 @@ Sentry.init({
 
 const app = express();
 
+// ── Trust proxy: Render usa proxy reverso (necesario para express-rate-limit) ─
+app.set('trust proxy', 1);
+
 // ── Sentry v8+: captura automática — no requiere requestHandler middleware ────
 // El tracing de requests Express se configura automáticamente desde Sentry.init()
 
@@ -51,9 +54,24 @@ app.use(helmet({
 app.use(compression());
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
+// Orígenes permitidos: localhost (dev) + Vercel (producción)
+const ALLOWED_ORIGINS = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'https://dte-speeddan.vercel.app',
+  // Permite previews de Vercel (*.vercel.app) durante desarrollo
+  /\.vercel\.app$/,
+];
 app.use(cors({
-  origin:         'http://localhost:3000',
-  methods:        ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  origin: (origin, callback) => {
+    // Sin origin = petición directa (Postman, curl, server-to-server) → permitir
+    if (!origin) return callback(null, true);
+    const allowed = ALLOWED_ORIGINS.some(o =>
+      typeof o === 'string' ? o === origin : o.test(origin)
+    );
+    callback(allowed ? null : new Error('CORS: origen no permitido'), allowed);
+  },
+  methods:        ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials:    true,
 }));

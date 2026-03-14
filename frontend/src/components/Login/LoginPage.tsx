@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuth, getTenantBySlug } from '../../context/AuthContext';
 import { TenantPublicInfo }          from '../../services/auth.service';
@@ -29,6 +29,7 @@ const INPUT_STYLE: React.CSSProperties = {
 export default function LoginPage() {
   const { login, user } = useAuth();
   const navigate        = useNavigate();
+  const { slug: slugParam } = useParams<{ slug?: string }>();
 
   const [step,         setStep]         = useState<Step>('empresa');
   const [slug,         setSlug]         = useState(() => localStorage.getItem('erp_last_tenant') ?? '');
@@ -49,6 +50,19 @@ export default function LoginPage() {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  // ── Auto-verificar si viene slug en la URL ───────────────────────────────────
+  useEffect(() => {
+    if (!slugParam) return;
+    const lower = slugParam.toLowerCase();
+    setSlug(lower);
+    setError(null);
+    setLoading(true);
+    getTenantBySlug(lower)
+      .then(info => { setTenant(info); setStep('credenciales'); })
+      .catch(() => setError('Código de empresa no encontrado. Verifica con tu administrador.'))
+      .finally(() => setLoading(false));
+  }, [slugParam]);
 
   // ── Paso 1: verificar slug de empresa ────────────────────────────────────────
   const handleVerifyEmpresa = async (e: FormEvent) => {

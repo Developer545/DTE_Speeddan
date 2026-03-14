@@ -62,8 +62,9 @@ function App() {
     <>
     <Toaster position="top-right" />
     <AnimatePresence mode="wait" initial={false}>
-      <Routes location={location} key={location.pathname === '/login' ? 'login' : 'app'}>
+      <Routes location={location} key={location.pathname.startsWith('/login') ? 'login' : 'app'}>
 
+        <Route path="/login/:slug"       element={<LoginPage />} />
         <Route path="/login"             element={<LoginPage />} />
         <Route path="/auth/impersonate" element={<ImpersonatePage />} />
 

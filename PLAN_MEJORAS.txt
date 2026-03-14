@@ -1,0 +1,380 @@
+================================================================================
+PLAN DE MEJORAS — ERP El Salvador
+Fecha: 2026-02-15
+================================================================================
+
+TEMAS A IMPLEMENTAR:
+  1. Campo de descuento en facturación
+  2. Tres modos de facturar Consumidor Final (DTE_01)
+  3. Retención ISR 1% para grandes empresas
+  4. Mejor estructura del formulario de clientes (Natural vs Jurídica)
+
+================================================================================
+1. CAMPO DE DESCUENTO EN FACTURACIÓN
+================================================================================
+
+CONTEXTO MH (DTE):
+  - El JSON DTE de Hacienda acepta descuentos en dos niveles:
+    a) Por línea: campo "montoDescu" en cuerpoDocumento[]
+    b) Global: campos "descuNoSuj", "descuExenta", "descuGravada",
+       "porcentajeDescuento", "totalDescu" en el resumen
+  - El precio unitario en la línea es el precio BRUTO (antes de descuento)
+  - La "ventaGravada" por línea = (precioUni - montoDescu) × cantidad
+  - El MH exige que si hay descuento, la venta gravada ya lo descuente
+
+DECISIÓN DE DISEÑO:
+  - Descuento POR LÍNEA (más flexible y correcto para DTE)
+  - El usuario puede ingresar el descuento como porcentaje (%) o monto fijo ($)
+  - En el carrito del POS habrá un campo "Dscto %" y/o "Dscto $" por fila
+
+FÓRMULAS:
+  - Si descuento = 10% y precio = $20.00, cantidad = 2:
+    montoDescu por unidad = $2.00
+    ventaGravada = (20 - 2) × 2 = $36.00
+  - El resumen suma todos los descuentos: totalDescu = Σ(montoDescu × cantidad)
+
+CAMBIOS NECESARIOS:
+  DB:
+    - factura_detalles ya tiene columna "descuento" (NUMERIC 12,2) — YA EXISTE
+    - No se requiere cambio en DB
+
+  Backend (facturacion.service.ts):
+    - CreateFacturaDetalleDTO: agregar descuento?: number
+    - En crearFactura(): restar el descuento en los cálculos de ventaGravada
+    - En generarDTEJSON(): poblar montoDescu por línea y totalDescu en resumen
+
+  Frontend:
+    - FacturaLineaPOS: agregar descuento?: number
+    - POS/index.tsx: agregar input "Descuento %" en el formulario de línea
+    - useFacturacion.ts: ajustar cálculo de subtotal/total
+
+
+================================================================================
+2. TRES MODOS DE FACTURAR CONSUMIDOR FINAL (DTE_01)
+================================================================================
+
+CONTEXTO MH (DTE_01):
+  El Ministerio de Hacienda permite tres escenarios para el receptor en DTE_01:
+
+  MODO A — CLIENTES VARIOS (Anónimo):
+    - El comprador no quiere identificarse
+    - En el JSON DTE, el bloque "receptor" va completamente en null:
+        "receptor": null
+      (Confirmado en Especificaciones Técnicas DTE v3 MH El Salvador)
+    - Solo aplica a DTE_01 (NO se puede en DTE_03 que requiere NIT/NRC del receptor)
+
+  MODO B — DATOS TRANSITORIOS (nombre + correo):
+    - El comprador quiere recibir la factura por correo pero no quiere ser
+      registrado como cliente permanente
+    - Se ingresa nombre y correo al momento de la venta
+    - Estos datos NO se guardan en la tabla "clientes"
+    - En el JSON DTE: receptor con nombre y correo pero sin numDocumento
+        "receptor": {
+          "tipoDocumento": null,
+          "numDocumento": null,
+          "nombre": "Juan García",
+          "correo": "juan@email.com",
+          ...otros campos null
+        }
+
+  MODO C — CLIENTE REGISTRADO (comportamiento actual):
+    - Se busca y selecciona un cliente de la tabla "clientes"
+    - Automáticamente determina DTE_01 (persona_natural) o DTE_03 (empresa)
+
+CAMBIOS NECESARIOS:
+  DB:
+    - facturas: hacer cliente_id NULLABLE (actualmente NOT NULL)
+    - facturas: agregar receptor_nombre VARCHAR(200) NULL
+    - facturas: agregar receptor_correo VARCHAR(200) NULL
+    (Para Modo A y B, cliente_id = NULL)
+
+  Backend (facturacion.model.ts):
+    - CreateFacturaDTO: cliente_id opcional, agregar receptor_modo,
+      receptor_nombre?, receptor_correo?
+
+  Backend (facturacion.service.ts):
+    - crearFactura(): detectar modo por presencia/ausencia de cliente_id
+    - Para Modo A/B: usar 'DTE_01' directamente (no llamar determinarTipoDTE)
+    - Para Modo A: receptor = null en JSON
+    - Para Modo B: receptor con nombre y correo pero sin documento
+    - listarFacturas(): cambiar JOIN a LEFT JOIN
+
+  Frontend:
+    - POS/index.tsx: añadir selector de modo ANTES de buscar cliente:
+        [Clientes Varios] [Con nombre/correo] [Cliente registrado]
+      - Si "Clientes Varios": se puede agregar productos directamente
+      - Si "Con nombre/correo": mostrar 2 inputs (nombre + correo)
+      - Si "Cliente registrado": flujo actual
+    - FacturacionList (lista de facturas): mostrar "Clientes Varios" cuando
+      cliente_nombre es null
+
+
+================================================================================
+3. RETENCIÓN ISR 1% PARA GRANDES EMPRESAS
+================================================================================
+
+MARCO LEGAL EL SALVADOR:
+  - Art. 156 del Código Tributario de El Salvador
+  - Art. 156-A: Retención del 1% del Impuesto sobre la Renta (ISR)
+  - ¿Cuándo aplica?
+    - Cuando el COMPRADOR es un "Gran Contribuyente" o "Agente de Retención"
+      designado por el Ministerio de Hacienda
+    - Se retiene sobre el valor de los BIENES o SERVICIOS adquiridos
+    - Solo aplica sobre el monto sin IVA (base imponible)
+  - ¿Quién retiene?
+    - El COMPRADOR (empresa) retiene el 1% al momento de pagar
+    - El VENDEDOR (emisor del ERP) registra esto en su factura
+  - Solo aplica a DTE_03 (Crédito Fiscal), NO a DTE_01 (Consumidor Final)
+
+CÓMO SE REFLEJA EN EL DTE_03:
+  En el resumen del JSON DTE:
+    "ivaRete1":   0.00,   ← Retención del 1% de IVA (diferente a ISR)
+    "reteRenta":  X.XX,   ← Retención ISR 1% ← ESTE ES EL QUE APLICA
+
+  Ejemplo: Venta de $1,000 sin IVA + 13% IVA = $1,130 total
+    reteRenta = $1,000 × 1% = $10.00
+    El vendedor recibe $1,130 - $10.00 = $1,120.00
+
+IMPLEMENTACIÓN PROPUESTA:
+  - En el POS, cuando el tipo es DTE_03 (empresa), mostrar un toggle:
+      "☑ Gran Contribuyente (retención ISR 1%)"
+  - Si está activo: calcular reteRenta = subtotal_sin_iva × 0.01
+  - Mostrar en el resumen del carrito la retención
+  - Incluir en el JSON DTE en resumen.reteRenta
+
+CAMBIOS NECESARIOS:
+  DB:
+    - facturas: agregar retencion_renta NUMERIC(12,2) DEFAULT 0
+
+  Backend:
+    - CreateFacturaDTO: agregar retencion_renta?: number
+    - crearFactura(): recibir retencion_renta y restarlo del total final
+    - generarDTEJSON(): poblar resumen.reteRenta
+
+  Frontend:
+    - POS: mostrar checkbox "Gran Contribuyente" solo cuando tipoDTE = DTE_03
+    - useFacturacion.ts: agregar retencionRenta state y cálculo
+
+
+================================================================================
+4. MEJOR ESTRUCTURA DEL FORMULARIO DE CLIENTES
+================================================================================
+
+MARCO LEGAL EL SALVADOR:
+  PERSONA NATURAL (individuo):
+    Documentos de identidad (CAT-022 MH):
+      - DUI (Documento Único de Identidad) — código MH: "13" — PRINCIPAL
+      - NIT (Número de Identificación Tributaria) — código MH: "36"
+        * Una persona natural puede tener DUI + NIT (son documentos distintos)
+        * El DUI es para transacciones generales
+        * El NIT es para obligaciones tributarias (DTE usa NIT cuando existe)
+      - Pasaporte — código MH: "03"
+      - Carnet de Residente / DIMEX — código MH: "37" (otros)
+
+    Campos NUEVOS para persona_natural:
+      - Tipo doc. principal: DUI (principal) / Pasaporte / Otro
+      - Número documento: el número del doc. principal
+      - NIT (opcional): para emitir DTE_01 con NIT
+      - Nombre completo, dirección, teléfono, correo (ya existen)
+
+  PERSONA JURÍDICA (empresa):
+    Documentos de identidad:
+      - NIT — código MH: "36" — OBLIGATORIO (identificador principal)
+      - NRC (Número de Registro de Contribuyente) — para DTE_03 (CCF)
+        * También llamado NCR en algunos sistemas
+        * Requerido para emitir Crédito Fiscal (DTE_03)
+
+    Campos NUEVOS para empresa:
+      - NIT: obligatorio (será el tipo_documento = "NIT")
+      - NRC/NCR: opcional pero importante para DTE_03
+      - Nombre Comercial: nombre con el que opera (distinto a razón social)
+      - Giro/Actividad Económica: tipo de negocio (para informativa)
+      - Razón Social = nombre_completo (ya existe)
+      - Teléfono, correo, dirección (ya existen)
+
+COMPARATIVA ACTUAL vs PROPUESTO:
+
+  ACTUAL:
+    - tipo_cliente: persona_natural | empresa
+    - tipo_documento: DUI | Pasaporte | Otro (faltan NIT, NRC)
+    - numero_documento: (doc. principal)
+    - nombre_completo
+    - direccion, telefono, correo
+    - departamento_id, municipio_id
+
+  PROPUESTO — Persona Natural:
+    - tipo_cliente = persona_natural
+    - tipo_documento: DUI (default) | Pasaporte | Carnet Residente | Otro
+    - numero_documento: número del doc. principal
+    - nit: (campo separado, opcional — para personas que tienen NIT)
+    - nombre_completo (required)
+    - telefono, correo, direccion
+    - departamento_id, municipio_id
+
+  PROPUESTO — Empresa:
+    - tipo_cliente = empresa
+    - tipo_documento = 'NIT' (fijo para empresa)
+    - numero_documento: el NIT de la empresa (14 dígitos)
+    - ncr: NRC/NCR (opcional, para DTE_03)
+    - nombre_completo: Razón Social (required)
+    - nombre_comercial: (opcional)
+    - giro: actividad económica (opcional)
+    - telefono, correo, direccion
+    - departamento_id, municipio_id
+
+FORMA DE IMPLEMENTAR:
+  Opción A: Formulario personalizado (custom ClienteForm)
+    - Crear ClienteForm.tsx con lógica de campos condicionales
+    - Mostrar campos de empresa solo cuando tipo_cliente = empresa
+    - Mostrar campo NIT para persona_natural solo si aplica
+    - PRO: mejor UX, más intuitivo
+    - CONTRA: más código, no usa el GenericForm genérico
+
+  Opción B: Mejorar el config.tsx con sección por tipo
+    - Agregar los campos nuevos al FIELDS array
+    - Mostrar todos los campos (algunos opcionales) para ambos tipos
+    - PRO: mínimo código nuevo
+    - CONTRA: menos intuitivo
+
+  RECOMENDACIÓN: Opción A (formulario personalizado para Clientes)
+
+
+================================================================================
+CAMBIOS EN BASE DE DATOS — RESUMEN
+================================================================================
+
+TABLA clientes:
+  ALTER TABLE clientes
+    ADD COLUMN nit VARCHAR(20),
+    ADD COLUMN ncr VARCHAR(20),
+    ADD COLUMN nombre_comercial VARCHAR(200),
+    ADD COLUMN giro VARCHAR(200);
+  ALTER TABLE clientes
+    DROP CONSTRAINT IF EXISTS clientes_tipo_documento_check;
+  ALTER TABLE clientes
+    ADD CONSTRAINT clientes_tipo_documento_check
+    CHECK (tipo_documento IN ('DUI', 'NIT', 'Pasaporte', 'Carnet Residente', 'Otro'));
+
+TABLA facturas:
+  ALTER TABLE facturas
+    ALTER COLUMN cliente_id DROP NOT NULL,
+    ADD COLUMN receptor_nombre VARCHAR(200),
+    ADD COLUMN receptor_correo VARCHAR(200),
+    ADD COLUMN retencion_renta NUMERIC(12,2) DEFAULT 0;
+
+
+================================================================================
+ORDEN DE IMPLEMENTACIÓN RECOMENDADO
+================================================================================
+
+PASO 1: DB + Backend (2 horas estimadas)
+  1.1 Actualizar database.ts (ADD COLUMN con ALTER TABLE IF NOT EXISTS)
+  1.2 Actualizar cliente.model.ts
+  1.3 Actualizar cliente.service.ts
+  1.4 Actualizar facturacion.model.ts (CreateFacturaDTO, Factura)
+  1.5 Actualizar facturacion.service.ts (los 4 temas)
+  1.6 Actualizar facturacion.controller.ts (validación del nuevo DTO)
+
+PASO 2: Frontend tipos y hooks
+  2.1 Actualizar cliente.types.ts
+  2.2 Actualizar facturacion.types.ts
+  2.3 Actualizar useFacturacion.ts
+
+PASO 3: Frontend componentes
+  3.1 Crear ClienteForm.tsx personalizado (4 secciones: tipo, doc, datos, dirección)
+  3.2 Actualizar Clientes/config.tsx (ya no usa GenericForm para formulario)
+  3.3 Actualizar POS/index.tsx (3 modos receptor, descuento, retención)
+
+PASO 4: UI secundaria
+  4.1 Actualizar FacturacionList (mostrar "Clientes Varios" cuando sin cliente)
+  4.2 Actualizar FacturaViewer si se requiere mostrar retención
+
+
+================================================================================
+NOTAS TÉCNICAS IMPORTANTES (VALIDADAS CON ESPECIFICACIONES MH DTE v3)
+================================================================================
+
+1. DTE_01 receptor — Clientes Varios NO es "null" total:
+   Según especificaciones técnicas MH El Salvador:
+   CORRECTO:
+     "receptor": {
+       "tipoDocumento": null,
+       "numDocumento":  null,
+       "nombre":        "Consumidor Final",   ← obligatorio este texto
+       "correo":        null,
+       ...otros campos null
+     }
+   - nombre = "Consumidor Final" es el placeholder aceptado por la API del MH
+   - tipoDocumento y numDocumento sí van null
+   - Para DTE_03 el receptor SIEMPRE requiere NIT y dirección
+
+2. Umbral de monto para receptor DTE_01:
+   - Ventas < $100:  receptor completamente anónimo ("Consumidor Final")
+   - Ventas >= $100: recomendable capturar nombre
+   - Ventas >= $200: algunas interpretaciones requieren número de documento
+   (El DTE schema técnicamente permite null en DTE_01 sin importar monto)
+
+3. Retención ISR vs Retención IVA:
+   - "reteRenta" = Retención ISR 1% (Art. 156-A CT) — lo que pediste
+     Base = subTotal (gravada SIN IVA) × 1%
+     montoTotalOperacion = (subtotal + IVA) - reteRenta
+   - "ivaRete1"  = Retención IVA 1% (diferente, para categorías especiales)
+   - Para este ERP solo implementamos reteRenta (ISR 1%)
+   - Actualmente en el código: ivaRete1: 0, reteRenta: 0 (hardcodeado)
+
+4. NRC para DTE_03 receptor:
+   - El campo cliente.ncr SIEMPRE es null actualmente porque la tabla
+     "clientes" NO tiene columna ncr — la query hace "NULL AS ncr"
+   - Esto puede causar fallos de validación en la API MH para DTE_03
+   - SOLUCIÓN: agregar columna ncr a la tabla clientes
+
+5. cliente_id nullable con LEFT JOIN:
+   - listarFacturas() usa JOIN → cambiar a LEFT JOIN
+   - La columna "cliente_nombre" mostrará el receptor_nombre si cliente_id = null,
+     o "Clientes Varios" si ambos son null
+
+6. NIT para persona_natural (campo separado):
+   - Una persona natural puede tener DUI + NIT (documentos distintos)
+   - Diseño: numero_documento = DUI, columna nit = NIT opcional
+   - Al emitir DTE_01: si tiene NIT, usar NIT como numDocumento (tipoDoc = "36")
+
+7. Catálogo 022 — Tipos de documento validados:
+   Código | Tipo
+   "03"   | Pasaporte
+   "04"   | Carnet de Residente    ← FALTA en la tabla actual
+   "13"   | DUI                    ← ya implementado
+   "36"   | NIT                    ← ya en tipoDocMH() pero falta en CHECK constraint
+   "37"   | Otro                   ← ya implementado
+
+8. CHECK constraint clientes.tipo_documento INCOMPLETO:
+   - Actual:   CHECK IN ('DUI', 'Pasaporte', 'Otro')
+   - Falta:    'NIT' (necesario para empresas) y 'Carnet Residente'
+   - Necesita DROP + ADD del constraint
+
+9. TipoDTE en frontend (facturacion.types.ts):
+   - Actual:   'DTE_01' | 'DTE_03'
+   - Debe ser: 'DTE_01' | 'DTE_03' | 'DTE_05' | 'DTE_06' | 'DTE_11'
+   - El backend ya tiene los 5 tipos; el frontend se quedó atrás
+
+================================================================================
+BRECHAS CRÍTICAS ACTUALES VS CUMPLIMIENTO MH
+================================================================================
+
+BRECHA 1: receptor "Consumidor Final" → NO HAY SOPORTE
+  Archivo: backend/src/services/facturacion.service.ts
+  Impacto: No se puede emitir DTE_01 sin un cliente registrado
+
+BRECHA 2: ncr siempre null en DTE_03 → POSIBLE RECHAZO MH
+  Archivo: backend/src/services/facturacion.service.ts línea ~292
+  SELECT devuelve "NULL AS ncr" — tabla clientes no tiene columna ncr
+
+BRECHA 3: reteRenta hardcodeado a 0 → INCUMPLIMIENTO PARA GRANDES EMPRESAS
+  Archivo: backend/src/services/facturacion.service.ts líneas 808-809
+
+BRECHA 4: tipo_documento no acepta 'NIT' en constraint DB
+  Archivo: backend/src/config/database.ts línea ~37
+
+BRECHA 5: TipoDTE frontend desactualizado
+  Archivo: frontend/src/types/facturacion.types.ts línea 5
+
+================================================================================

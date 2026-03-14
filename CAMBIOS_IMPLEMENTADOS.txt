@@ -1,0 +1,428 @@
+================================================================================
+  SISTEMA ERP MULTITENANT - SPEEDDANSYS
+  REGISTRO DE CAMBIOS IMPLEMENTADOS
+  Fecha: 2026-02-16
+================================================================================
+
+CONTEXTO DEL SISTEMA
+--------------------
+Sistema ERP SaaS (Software as a Service) con arquitectura multitenant.
+Tiene dos paneles separados:
+
+  - Panel SuperAdmin (/superadmin):
+    Usado SOLO por el dueno del sistema (tu).
+    Desde aqui se crean empresas (clientes), se gestionan pagos,
+    se crean usuarios y se controla todo el sistema.
+
+  - Panel ERP (/):
+    Usado por cada empresa cliente.
+    Tiene modulos de Clientes, Proveedores, Productos, Compras,
+    Inventario, POS, Facturacion DTE y Configuracion.
+
+Cada empresa tiene sus propios datos completamente aislados.
+La separacion se hace mediante tenant_id en cada tabla de la base de datos
+y un JWT (token de sesion) que identifica a que empresa pertenece cada usuario.
+
+================================================================================
+CAMBIOS IMPLEMENTADOS - DETALLE COMPLETO
+================================================================================
+
+------------------------------------------------------------------------
+CORRECCION DE BUG - Panel SuperAdmin - Crear empresa
+------------------------------------------------------------------------
+ARCHIVO:  frontend/src/superadmin/SuperAdminApp.tsx
+ARCHIVO:  backend/src/superadmin/superadmin.service.ts
+
+PROBLEMA:
+  Al presionar "+ Nuevo cliente" la pantalla se quedaba en "Cargando..."
+  indefinidamente y nunca mostraba el formulario de creacion.
+
+CAUSA RAIZ:
+  En React Router v6 habia dos rutas para la misma pagina:
+    - path="clientes/nuevo"  (ruta estatica)  <-- ESTA tomaba prioridad
+    - path="clientes/:id"    (ruta parametrica)
+  Como la ruta estatica no tiene parametros, useParams() devolvía {}
+  y la variable id quedaba como undefined en lugar de "nuevo".
+  Esto causaba que isNew = false, loading = true y el fetch nunca ejecutaba.
+
+SOLUCION:
+  Se elimino la ruta estatica "clientes/nuevo".
+  Ahora solo existe "clientes/:id".
+  Al navegar a /superadmin/clientes/nuevo, el parametro id = "nuevo"
+  y la logica isNew = (id === 'nuevo') funciona correctamente.
+
+PROBLEMA 2 (error 400 al guardar):
+  El campo fecha_pago se enviaba como string vacio "" al backend.
+  PostgreSQL rechaza "" en columnas de tipo DATE.
+  El operador ?? (nullish coalescing) no convierte "" a null,
+  solo convierte null y undefined.
+
+SOLUCION:
+  Se cambio dto.fecha_pago ?? null  por  dto.fecha_pago || null
+  El operador || convierte cualquier valor "falsy" (incluido "") a null.
+  Se aplico la misma correccion en updateTenant para todos los campos.
+
+ADICIONALMENTE:
+  Se agrego generacion automatica del slug (codigo de empresa) al escribir
+  el nombre. Ejemplo: "Farmacia San Jose" -> "farmacia-san-jose".
+  Solo aplica en modo creacion, no sobreescribe el slug en edicion.
+
+------------------------------------------------------------------------
+TAREA 1 - Rate Limiting + Helmet + Compression
+------------------------------------------------------------------------
+PAQUETES:  express-rate-limit, helmet, compression
+ARCHIVOS:  backend/src/middleware/rateLimiter.ts
+           backend/src/server.ts
+           backend/src/routes/auth.routes.ts
+           backend/src/superadmin/superadmin.routes.ts
+
+QUE ES RATE LIMITING:
+  Limita cuantas veces puede llamar a un endpoint una misma IP
+  en un periodo de tiempo determinado.
+  Protege contra ataques de fuerza bruta (adivinar contrasenas
+  haciendo miles de intentos automatizados).
+
+LIMITES CONFIGURADOS:
+  - Login SuperAdmin:  5 intentos por IP cada 15 minutos
+  - Login Tenant:      10 intentos por IP cada 15 minutos
+  - Crear empresa:     20 creaciones por IP por hora
+  - API en general:    300 requests por IP cada 5 minutos
+
+  Si se supera el limite, el servidor responde con error 429
+  y un mensaje como "Demasiados intentos. Intenta en 15 minutos."
+
+NOTA TECNICA:
+  Usa memoria del proceso Node.js (sin Redis).
+  Suficiente para 50-200 clientes. Si en el futuro se escalan a
+  multiples servidores, se puede migrar a RedisStore facilmente.
+
+QUE ES HELMET:
+  Libreria que activa automaticamente mas de 10 headers HTTP de seguridad
+  con una sola linea de codigo. Protege contra:
+  - XSS (Cross-Site Scripting)
+  - Clickjacking (envolver la app en un iframe malicioso)
+  - Sniffing del tipo de contenido
+  - Informacion del servidor expuesta
+  Entre otros ataques comunes.
+
+QUE ES COMPRESSION:
+  Comprime las respuestas HTTP con gzip antes de enviarlas al navegador.
+  Reduce el tamano de las respuestas JSON entre un 60% y 80%.
+  Hace el sistema mas rapido sin cambiar ningun codigo de negocio.
+
+------------------------------------------------------------------------
+TAREA 2 - Validacion de Inputs con Zod
+------------------------------------------------------------------------
+PAQUETES:  zod
+ARCHIVOS:  backend/src/middleware/schemas.ts
+           backend/src/middleware/validate.ts (funcion validateZod agregada)
+           backend/src/superadmin/superadmin.routes.ts
+           backend/src/routes/auth.routes.ts
+
+QUE ES ZOD:
+  Libreria de validacion de datos para TypeScript/JavaScript.
+  Permite definir la "forma" esperada de un objeto (schema)
+  y verificar que los datos recibidos cumplen esa forma ANTES
+  de que lleguen al controlador o la base de datos.
+
+POR QUE ES IMPORTANTE:
+  Sin validacion, un usuario malicioso podria enviar:
+  - { nombre: null }  -> crash del servidor
+  - { slug: "'; DROP TABLE tenants;--" }  -> SQL injection (aunque ya
+    usamos queries parametrizadas, es buena practica validar)
+  - { monto: -99999 }  -> datos incorrectos en la BD
+  - { email: "esto no es un email" }  -> datos corruptos
+
+SCHEMAS CREADOS:
+  - SuperAdminLoginSchema:       username y password requeridos
+  - TenantLoginSchema:           tenant_slug, username, password requeridos
+  - CreateTenantSchema:          nombre, slug (formato valido), email opcional
+  - UpdateTenantSchema:          todos los campos opcionales, validados
+  - RegistrarPagoSchema:         monto positivo requerido
+  - CreateUsuarioTenantSchema:   nombre, username (sin caracteres raros), password min 6 chars
+  - UpdateUsuarioTenantSchema:   todos opcionales, password vacio = sin cambio
+  - CreatePlanSchema:            nombre, limites y precio validos
+
+COMPORTAMIENTO:
+  Si los datos no cumplen el schema, el servidor responde con codigo 422
+  y un JSON con los errores detallados por campo:
+  {
+    "message": "Datos invalidos",
+    "errores": [
+      { "campo": "slug", "mensaje": "El codigo solo puede contener letras minusculas, numeros y guiones" },
+      { "campo": "monto", "mensaje": "El monto debe ser mayor a 0" }
+    ]
+  }
+
+------------------------------------------------------------------------
+TAREA 3 - Sistema de Auditoria (Audit Log)
+------------------------------------------------------------------------
+ARCHIVOS:  backend/src/utils/audit.ts
+           backend/src/config/database.ts (tabla audit_log agregada)
+           backend/src/superadmin/superadmin.controller.ts
+
+QUE ES UN AUDIT LOG:
+  Registro inmutable de todas las acciones importantes que ocurren
+  en el sistema. Responde la pregunta: "quien hizo que, cuando y desde donde".
+
+TABLA CREADA EN LA BASE DE DATOS:
+  audit_log:
+    - id           -> identificador unico
+    - actor_id     -> quien realizo la accion (id del superadmin o null si fue el sistema)
+    - actor_tipo   -> 'superadmin' o 'sistema' (para acciones automaticas del cron)
+    - accion       -> que se hizo (ej: 'crear_tenant', 'registrar_pago')
+    - tenant_id    -> a que empresa afecta (puede ser null)
+    - detalle      -> JSON con informacion adicional (ej: { nombre: "Farmacia", slug: "farmacia" })
+    - ip           -> direccion IP desde donde se realizo la accion
+    - created_at   -> fecha y hora exacta
+
+ACCIONES QUE SE REGISTRAN:
+  - login_superadmin      : cuando el superadmin inicia sesion
+  - logout_superadmin     : cuando el superadmin cierra sesion
+  - crear_tenant          : cuando se crea una nueva empresa
+  - actualizar_tenant     : cuando se editan datos de una empresa
+  - suspender_tenant      : cuando se suspende una empresa (manual o automatico)
+  - activar_tenant        : cuando se activa una empresa
+  - registrar_pago        : cuando se registra un pago de una empresa
+  - crear_usuario         : cuando se crea un usuario para una empresa
+  - actualizar_usuario    : cuando se edita un usuario
+  - eliminar_usuario      : cuando se elimina un usuario
+  - reset_password        : cuando se resetea la contrasena de un usuario
+  - impersonar_tenant     : cuando el superadmin entra al sistema de una empresa
+
+NOTA TECNICA:
+  La funcion logAudit() esta disenada para NUNCA interrumpir el flujo
+  principal. Si falla al escribir en la BD (ej: problema de conexion),
+  solo imprime el error en consola pero la operacion principal continua.
+
+------------------------------------------------------------------------
+TAREA 4 - Cron Job de Suspension Automatica
+------------------------------------------------------------------------
+PAQUETES:  node-cron
+ARCHIVOS:  backend/src/jobs/billing.job.ts
+           backend/src/server.ts (se inicializa al arrancar)
+           backend/src/config/env.ts (variable GRACE_PERIOD_DAYS agregada)
+
+QUE ES UN CRON JOB:
+  Una tarea programada que se ejecuta automaticamente en un horario definido,
+  sin que nadie tenga que hacer nada manualmente.
+  Similar a las tareas programadas de Windows o crontab en Linux.
+
+QUE HACE:
+  Todos los dias a las 00:05 hora de El Salvador, verifica si hay
+  empresas con fecha de pago vencida y las suspende automaticamente.
+
+LOGICA:
+  Si fecha_pago < hoy - GRACE_PERIOD_DAYS:
+    -> Cambiar estado de 'activo'/'pruebas' a 'suspendido'
+    -> Registrar en audit_log con actor_tipo = 'sistema'
+    -> Imprimir en consola el nombre de la empresa suspendida
+
+PERIODO DE GRACIA:
+  Se configura en el archivo .env con la variable GRACE_PERIOD_DAYS.
+  Por defecto son 3 dias. Significa que si una empresa vence el dia 1,
+  no se suspende hasta el dia 4.
+  Esto da margen para que el cliente pague sin perder acceso inmediatamente.
+
+EJEMPLO:
+  Empresa "Farmacia Rivera":
+  - fecha_pago = 2026-02-10
+  - GRACE_PERIOD_DAYS = 3
+  - Se suspende automaticamente el 2026-02-14 a las 00:05
+
+------------------------------------------------------------------------
+TAREA 5 - Dashboard con Metricas de Negocio
+------------------------------------------------------------------------
+ARCHIVOS:  backend/src/superadmin/superadmin.service.ts (getDashboardStats mejorado)
+           frontend/src/superadmin/pages/DashboardPage.tsx (rediseñado)
+           frontend/src/superadmin/services/superadmin.service.ts (tipos actualizados)
+
+METRICAS NUEVAS EN EL DASHBOARD:
+
+  INGRESOS:
+  - MRR (Monthly Recurring Revenue): suma del precio del plan de todas
+    las empresas con estado 'activo'. Indica cuanto deberia facturar el
+    sistema cada mes si todos pagan.
+  - Ingresos cobrados este mes: suma real de pagos registrados en el mes actual.
+  - Ingresos cobrados mes anterior: para comparar tendencia.
+
+  CONTEOS:
+  - Activos, En pruebas, Suspendidos
+  - Vencen en 7 dias (por vencer)
+  - Pago vencido (ya vencio pero aun no suspendido)
+  - Nuevos este mes
+
+  ALERTAS URGENTES:
+  - Lista de empresas con pago vencido (requieren atencion inmediata)
+  - Lista de empresas que vencen en los proximos 7 dias
+  - Cada alerta tiene boton "Ver ->" que lleva directo a esa empresa
+  - Si no hay alertas, muestra mensaje verde "Todos los clientes al dia"
+
+------------------------------------------------------------------------
+TAREA 6 - Impersonacion de Tenant
+------------------------------------------------------------------------
+ARCHIVOS:  backend/src/superadmin/superadmin.service.ts (generarTokenImpersonacion)
+           backend/src/superadmin/superadmin.controller.ts (postImpersonate)
+           backend/src/superadmin/superadmin.routes.ts (ruta agregada)
+           backend/src/controllers/auth.controller.ts (postImpersonateLogin)
+           backend/src/services/auth.service.ts (verifyToken agregado)
+           backend/src/routes/auth.routes.ts (ruta /impersonate agregada)
+           frontend/src/superadmin/pages/ClienteDetailPage.tsx (boton agregado)
+           frontend/src/superadmin/services/superadmin.service.ts (metodo agregado)
+           frontend/src/components/Login/ImpersonatePage.tsx (pagina nueva)
+           frontend/src/App.jsx (ruta /auth/impersonate agregada)
+
+QUE ES LA IMPERSONACION:
+  Funcionalidad que permite al superadmin entrar al sistema de una empresa
+  como si fuera el administrador de esa empresa, SIN necesitar su contrasena.
+  Es la herramienta mas valiosa para dar soporte tecnico a los clientes.
+  "Ves exactamente lo que ve el cliente y puedes resolver su problema en segundos."
+
+COMO FUNCIONA:
+  1. Superadmin abre la pagina de una empresa en el panel
+  2. Hace clic en el boton "Entrar como cliente ->"
+  3. El backend genera un token JWT temporal (15 minutos, no renovable)
+  4. Se abre una nueva pestana del navegador con /auth/impersonate?token=...
+  5. Esa pagina llama al backend para canjear el token y crear la cookie
+  6. Redirige al dashboard del ERP de esa empresa ya autenticado
+  7. La sesion expira automaticamente en 15 minutos
+
+SEGURIDAD:
+  - El token dura solo 15 minutos
+  - Lleva la marca impersonated: true en el payload para auditoria
+  - Cada uso queda registrado en audit_log con la accion 'impersonar_tenant'
+  - No se puede usar el token de superadmin para entrar al ERP (secretos JWT distintos)
+
+ENDPOINT BACKEND:
+  POST /superadmin/tenants/:id/impersonate   -> genera el token temporal
+  POST /api/auth/impersonate                 -> canjea el token y crea la cookie
+
+------------------------------------------------------------------------
+TAREA 7 - Reset de Contrasena + Checklist de Onboarding
+------------------------------------------------------------------------
+ARCHIVOS:  backend/src/superadmin/superadmin.service.ts (resetUsuarioPassword)
+           backend/src/superadmin/superadmin.controller.ts (postResetPassword)
+           backend/src/superadmin/superadmin.routes.ts (ruta agregada)
+           frontend/src/superadmin/pages/ClienteDetailPage.tsx (boton Resetear)
+           frontend/src/superadmin/services/superadmin.service.ts (metodo resetPassword)
+           backend/src/routes/index.ts (endpoint /onboarding/status)
+           frontend/src/components/Common/OnboardingChecklist.tsx (componente nuevo)
+           frontend/src/components/MainMenu/MainMenu.jsx (checklist integrado)
+
+RESET DE CONTRASENA:
+  En la pestana "Usuarios" de cada empresa, cada usuario tiene un boton
+  "Resetear" (en color amarillo para diferenciarlo de editar y eliminar).
+
+  Al hacer clic:
+  1. Pide confirmacion
+  2. El backend genera una contrasena temporal aleatoria de 10 caracteres
+     usando letras mayusculas, minusculas, numeros y simbolos seguros
+     (sin caracteres confusos como 0/O, 1/l)
+  3. Hashea la contrasena y la guarda en la BD
+  4. Muestra la contrasena en pantalla al superadmin
+  5. Registra la accion en audit_log
+  El superadmin comunica esa contrasena al cliente (por telefono, WhatsApp, etc.)
+  El cliente puede cambiarla desde Configuracion > Usuarios una vez que entre.
+
+ENDPOINT BACKEND:
+  POST /superadmin/tenants/:id/usuarios/:userId/reset-password
+
+CHECKLIST DE ONBOARDING:
+  Banner que aparece en el panel ERP de cada empresa nueva con 5 pasos
+  para configurar el sistema correctamente desde el inicio.
+
+  PASOS:
+  1. Completa los datos de tu empresa (NIT, NCR, direccion) -> /configuracion
+  2. Configura tu sucursal y punto de venta              -> /configuracion
+  3. Agrega tus primeros productos                        -> /productos
+  4. Registra tu primer cliente                           -> /clientes
+  5. Emite tu primera factura                             -> /facturacion
+
+  COMO FUNCIONA:
+  - El estado de cada paso se verifica en tiempo real contra la base de datos
+    (no son simples flags guardados en localStorage)
+  - Cada paso tiene un circulo verde cuando esta completo
+  - Al hacer clic en un paso incompleto, navega directamente a ese modulo
+  - Tiene barra de progreso visual (ej: 3/5 pasos)
+  - El usuario puede cerrar el banner haciendo clic en la "X"
+  - Una vez cerrado, no vuelve a aparecer (se guarda en localStorage)
+  - Si todos los pasos estan completos, el banner desaparece automaticamente
+
+  ENDPOINT BACKEND:
+  GET /api/onboarding/status
+  Respuesta:
+  {
+    "empresa_completa":  true/false,  <- tiene NIT, NCR, nombre y direccion
+    "tiene_productos":   true/false,  <- al menos 1 producto creado
+    "tiene_sucursal":    true/false,  <- al menos 1 sucursal activa
+    "tiene_clientes":    true/false,  <- al menos 1 cliente registrado
+    "primera_factura":   true/false   <- al menos 1 factura emitida
+  }
+
+================================================================================
+ARCHIVOS NUEVOS CREADOS
+================================================================================
+
+backend/src/middleware/rateLimiter.ts
+  -> Configuracion de todos los rate limiters del sistema
+
+backend/src/middleware/schemas.ts
+  -> Schemas Zod para validacion de todos los inputs criticos
+
+backend/src/utils/audit.ts
+  -> Helper logAudit() y constantes AUDIT_ACCIONES
+
+backend/src/jobs/billing.job.ts
+  -> Cron job de suspension automatica de tenants vencidos
+
+frontend/src/components/Login/ImpersonatePage.tsx
+  -> Pagina que canjea el token de impersonacion y redirige al ERP
+
+frontend/src/components/Common/OnboardingChecklist.tsx
+  -> Componente de checklist de configuracion inicial para nuevas empresas
+
+================================================================================
+VARIABLES DE ENTORNO NUEVAS
+================================================================================
+
+GRACE_PERIOD_DAYS = 3
+  Dias de gracia despues del vencimiento antes de suspender automaticamente.
+  Valor por defecto: 3 dias.
+  Se puede cambiar en el archivo .env del backend.
+
+================================================================================
+DEPENDENCIAS INSTALADAS EN EL BACKEND
+================================================================================
+
+express-rate-limit   -> Rate limiting sin Redis
+helmet               -> Headers de seguridad HTTP
+compression          -> Compresion gzip de respuestas
+zod                  -> Validacion de schemas de datos
+node-cron            -> Tareas programadas (cron jobs)
+@types/compression   -> Tipos TypeScript para compression (devDependency)
+@types/node-cron     -> Tipos TypeScript para node-cron (devDependency)
+
+================================================================================
+NOTAS PARA PRODUCCION
+================================================================================
+
+1. GRACE_PERIOD_DAYS: ajustar segun la politica comercial.
+   Se recomienda entre 3 y 7 dias.
+
+2. Los rate limiters usan memoria del proceso Node.js.
+   Si en el futuro se despliegan multiples instancias (load balancer),
+   instalar Redis y configurar RedisStore en rateLimiter.ts.
+
+3. El audit_log crecera con el tiempo. Considerar archivar registros
+   con mas de 1 ano para mantener el rendimiento.
+
+4. La impersonacion genera tokens con el mismo secreto JWT_SECRET del ERP.
+   El token lleva impersonated: true en el payload para identificarlo en logs.
+
+5. Las contraseneas temporales del reset son de 10 caracteres.
+   Se puede aumentar la longitud cambiando el numero en
+   generarPasswordTemporal() en superadmin.service.ts.
+
+================================================================================
+FIN DEL DOCUMENTO
+================================================================================

@@ -1,0 +1,632 @@
+// ══════════════════════════════════════════════════════════
+// Prisma Schema — Facturación DTE Online
+// BD: PostgreSQL (Neon) — Multi-tenant SaaS
+// Versión Prisma: 7.x
+// ══════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ══════════════════════════════════════════════════════════
+// PLATAFORMA SAAS — SuperAdmin, Planes, Tenants
+// ══════════════════════════════════════════════════════════
+
+model SuperadminUser {
+  id            Int       @id @default(autoincrement())
+  nombre        String    @db.VarChar(100)
+  username      String    @unique @db.VarChar(50)
+  passwordHash  String    @map("password_hash") @db.VarChar(200)
+  totpSecret    String?   @map("totp_secret") @db.VarChar(255)
+  totpEnabled   Boolean   @default(false) @map("totp_enabled")
+  activo        Boolean   @default(true)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  pagosRegistrados TenantPago[]
+  auditLogs        AuditLog[]
+
+  @@map("superadmin_users")
+}
+
+model Plan {
+  id               Int       @id @default(autoincrement())
+  nombre           String    @unique @db.VarChar(50)
+  maxSucursales    Int       @default(1) @map("max_sucursales")
+  maxPuntosVenta   Int?      @map("max_puntos_venta")
+  maxUsuarios      Int       @default(3) @map("max_usuarios")
+  precio           Decimal   @default(0) @db.Decimal(10, 2)
+  activo           Boolean   @default(true)
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  tenants Tenant[]
+
+  @@map("planes")
+}
+
+model Tenant {
+  id               Int       @id @default(autoincrement())
+  nombre           String    @db.VarChar(200)
+  slug             String    @unique @db.VarChar(50)
+  emailContacto    String?   @map("email_contacto") @db.VarChar(200)
+  telefono         String?   @db.VarChar(50)
+  planId           Int?      @map("plan_id")
+  estado           String    @default("pruebas") @db.VarChar(20)
+  maxSucursales    Int?      @map("max_sucursales")
+  maxPuntosVenta   Int?      @map("max_puntos_venta")
+  maxUsuarios      Int?      @map("max_usuarios")
+  fechaPago        DateTime? @map("fecha_pago") @db.Date
+  fechaSuspension  DateTime? @map("fecha_suspension") @db.Date
+  notas            String?
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  plan                Plan?                @relation(fields: [planId], references: [id], onDelete: Restrict)
+  pagos               TenantPago[]
+  apiMh               TenantApiMh?
+  firma               TenantFirma?
+  clientes            Cliente[]
+  proveedores         Proveedor[]
+  categorias          Categoria[]
+  empleados           Empleado[]
+  productos           Producto[]
+  compras             Compra[]
+  inventario          Inventario[]
+  sucursales          Sucursal[]
+  facturas            Factura[]
+  usuarios            Usuario[]
+  configuracion       ConfiguracionEmpresa?
+  tema                ConfiguracionTema?
+  movimientos         MovimientoInventario[]
+  auditLogs           AuditLog[]
+
+  @@map("tenants")
+}
+
+model TenantPago {
+  id              Int       @id @default(autoincrement())
+  tenantId        Int       @map("tenant_id")
+  monto           Decimal   @db.Decimal(10, 2)
+  fechaPago       DateTime  @default(now()) @map("fecha_pago") @db.Date
+  metodo          String?   @db.VarChar(50)
+  notas           String?
+  registradoPorId Int?      @map("registrado_por")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  tenant        Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  registradoPor SuperadminUser? @relation(fields: [registradoPorId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@map("tenant_pagos")
+}
+
+model TenantApiMh {
+  id              Int       @id @default(autoincrement())
+  tenantId        Int       @unique @map("tenant_id")
+  ambiente        String    @default("pruebas") @db.VarChar(15)
+  urlAuth         String    @default("https://apitest.dtes.mh.gob.sv/seguridad/auth") @map("url_auth") @db.VarChar(500)
+  urlTransmision  String    @default("https://apitest.dtes.mh.gob.sv/fesv/recepciondte") @map("url_transmision") @db.VarChar(500)
+  usuarioApi      String?   @map("usuario_api") @db.VarChar(100)
+  passwordApi     String?   @map("password_api")
+  tokenActivo     String?   @map("token_activo")
+  tokenExpiraEn   DateTime? @map("token_expira_en")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("tenant_api_mh")
+}
+
+model TenantFirma {
+  id                Int       @id @default(autoincrement())
+  tenantId          Int       @unique @map("tenant_id")
+  archivoNombre     String?   @map("archivo_nombre") @db.VarChar(200)
+  certificadoPath   String?   @map("certificado_path") @db.VarChar(500)
+  certificadoPass   String?   @map("certificado_pass")
+  nitCertificado    String?   @map("nit_certificado") @db.VarChar(30)
+  fechaVencimiento  DateTime? @map("fecha_vencimiento") @db.Date
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("tenant_firma")
+}
+
+// ══════════════════════════════════════════════════════════
+// AUDITORÍA
+// ══════════════════════════════════════════════════════════
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  actorId    Int?     @map("actor_id")
+  actorTipo  String   @default("superadmin") @map("actor_tipo") @db.VarChar(20)
+  accion     String   @db.VarChar(100)
+  tenantId   Int?     @map("tenant_id")
+  detalle    Json?
+  ip         String?  @db.VarChar(50)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant Tenant?         @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  actor  SuperadminUser? @relation(fields: [actorId], references: [id])
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@map("audit_log")
+}
+
+// ══════════════════════════════════════════════════════════
+// CATÁLOGOS MH (El Salvador)
+// ══════════════════════════════════════════════════════════
+
+model CatDepartamento {
+  id     Int    @id @default(autoincrement())
+  codigo String @unique @db.VarChar(5)
+  nombre String @db.VarChar(100)
+
+  municipios      CatMunicipio[]
+  clientes        Cliente[]             @relation("ClienteDepartamento")
+  proveedores     Proveedor[]           @relation("ProveedorDepartamento")
+  empleados       Empleado[]            @relation("EmpleadoDepartamento")
+  sucursales      Sucursal[]             @relation("SucursalDepartamento")
+  configuraciones ConfiguracionEmpresa[] @relation("ConfigDepartamento")
+
+  @@map("cat_departamentos")
+}
+
+model CatMunicipio {
+  id             Int    @id @default(autoincrement())
+  codigo         String @db.VarChar(5)
+  nombre         String @db.VarChar(100)
+  departamentoId Int    @map("departamento_id")
+
+  departamento    CatDepartamento  @relation(fields: [departamentoId], references: [id], onDelete: Cascade)
+  clientes        Cliente[]        @relation("ClienteMunicipio")
+  proveedores     Proveedor[]      @relation("ProveedorMunicipio")
+  empleados       Empleado[]       @relation("EmpleadoMunicipio")
+  sucursales      Sucursal[]        @relation("SucursalMunicipio")
+  configuraciones ConfiguracionEmpresa[] @relation("ConfigMunicipio")
+
+  @@unique([codigo, departamentoId])
+  @@map("cat_municipios")
+}
+
+// ══════════════════════════════════════════════════════════
+// CONFIGURACIÓN POR TENANT
+// ══════════════════════════════════════════════════════════
+
+model ConfiguracionEmpresa {
+  id                   Int      @id @default(autoincrement())
+  nombreNegocio        String   @default("Mi Empresa") @map("nombre_negocio") @db.VarChar(200)
+  nit                  String?  @db.VarChar(30)
+  ncr                  String?  @db.VarChar(30)
+  direccion            String?
+  giro                 String?  @db.VarChar(200)
+  departamento         String?  @db.VarChar(100)
+  municipio            String?  @db.VarChar(100)
+  telefono             String?  @db.VarChar(30)
+  correo               String?  @db.VarChar(100)
+  logoUrl              String?  @map("logo_url") @db.VarChar(500)
+  codActividad         String?  @map("cod_actividad") @db.VarChar(10)
+  descActividad        String?  @map("desc_actividad") @db.VarChar(200)
+  tipoEstablecimiento  String?  @default("02") @map("tipo_establecimiento") @db.VarChar(5)
+  departamentoId       Int?     @map("departamento_id")
+  municipioId          Int?     @map("municipio_id")
+  tenantId             Int?     @unique @map("tenant_id")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  departamentoRel CatDepartamento? @relation("ConfigDepartamento", fields: [departamentoId], references: [id], onDelete: SetNull)
+  municipioRel    CatMunicipio?    @relation("ConfigMunicipio", fields: [municipioId], references: [id], onDelete: SetNull)
+  tenant          Tenant?          @relation(fields: [tenantId], references: [id])
+
+  @@map("configuracion_empresa")
+}
+
+model ConfiguracionTema {
+  id         Int      @id @default(autoincrement())
+  accent     String   @default("#111111")
+  accentText String   @default("#ffffff") @map("accent_text")
+  pageBg     String   @default("#f5f5f5") @map("page_bg")
+  cardBg     String   @default("#ffffff") @map("card_bg")
+  sidebarBg  String   @default("#ffffff") @map("sidebar_bg")
+  glassBlur  String   @default("") @map("glass_blur")
+  tenantId   Int?     @unique @map("tenant_id")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id])
+
+  @@map("configuracion_tema")
+}
+
+/// Legacy singleton (tenant_id = 1) — usar TenantApiMh para multi-tenant
+model ConfiguracionApiMh {
+  id              Int       @id @default(1)
+  ambiente        String    @default("00") @db.VarChar(5)
+  urlAuth         String    @default("https://apitest.dtes.mh.gob.sv/seguridad/auth") @map("url_auth") @db.VarChar(500)
+  urlTransmision  String    @default("https://apitest.dtes.mh.gob.sv/fesv/recepciondte") @map("url_transmision") @db.VarChar(500)
+  usuarioApi      String?   @map("usuario_api") @db.VarChar(100)
+  passwordApi     String?   @map("password_api") @db.VarChar(200)
+  tokenActivo     String?   @map("token_activo")
+  tokenExpiraEn   DateTime? @map("token_expira_en")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@map("configuracion_api_mh")
+}
+
+/// Legacy singleton (tenant_id = 1) — usar TenantFirma para multi-tenant
+model ConfiguracionFirma {
+  id                Int       @id @default(1)
+  certificadoPath   String?   @map("certificado_path") @db.VarChar(500)
+  certificadoPass   String?   @map("certificado_pass") @db.VarChar(200)
+  nitCertificado    String?   @map("nit_certificado") @db.VarChar(30)
+  fechaVencimiento  DateTime? @map("fecha_vencimiento") @db.Date
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@map("configuracion_firma")
+}
+
+// ══════════════════════════════════════════════════════════
+// ENTIDADES DE NEGOCIO
+// ══════════════════════════════════════════════════════════
+
+model Cliente {
+  id               Int      @id @default(autoincrement())
+  tipoCliente      String   @map("tipo_cliente") @db.VarChar(20)
+  nombreCompleto   String   @map("nombre_completo") @db.VarChar(200)
+  tipoDocumento    String   @map("tipo_documento") @db.VarChar(20)
+  numeroDocumento  String   @map("numero_documento") @db.VarChar(50)
+  direccion        String?
+  telefono         String?  @db.VarChar(20)
+  correo           String?  @db.VarChar(100)
+  departamentoId   Int?     @map("departamento_id")
+  municipioId      Int?     @map("municipio_id")
+  nit              String?  @db.VarChar(20)
+  ncr              String?  @db.VarChar(20)
+  nombreComercial  String?  @map("nombre_comercial") @db.VarChar(200)
+  giro             String?  @db.VarChar(200)
+  tenantId         Int?     @map("tenant_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  departamento CatDepartamento? @relation("ClienteDepartamento", fields: [departamentoId], references: [id], onDelete: SetNull)
+  municipio    CatMunicipio?    @relation("ClienteMunicipio", fields: [municipioId], references: [id], onDelete: SetNull)
+  tenant       Tenant?          @relation(fields: [tenantId], references: [id])
+  facturas     Factura[]
+
+  @@index([tenantId])
+  @@map("clientes")
+}
+
+model Proveedor {
+  id             Int      @id @default(autoincrement())
+  nombre         String   @db.VarChar(200)
+  nit            String?  @db.VarChar(20)
+  ncr            String?  @db.VarChar(20)
+  direccion      String?
+  telefono       String?  @db.VarChar(20)
+  correo         String?  @db.VarChar(100)
+  departamentoId Int?     @map("departamento_id")
+  municipioId    Int?     @map("municipio_id")
+  tenantId       Int?     @map("tenant_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  departamento CatDepartamento? @relation("ProveedorDepartamento", fields: [departamentoId], references: [id], onDelete: SetNull)
+  municipio    CatMunicipio?    @relation("ProveedorMunicipio", fields: [municipioId], references: [id], onDelete: SetNull)
+  tenant       Tenant?          @relation(fields: [tenantId], references: [id])
+  compras      Compra[]
+
+  @@index([tenantId])
+  @@map("proveedores")
+}
+
+model Categoria {
+  id        Int      @id @default(autoincrement())
+  nombre    String   @db.VarChar(100)
+  tenantId  Int?     @map("tenant_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant    Tenant?    @relation(fields: [tenantId], references: [id])
+  productos Producto[]
+
+  @@unique([tenantId, nombre])
+  @@map("categorias")
+}
+
+model Empleado {
+  id               Int      @id @default(autoincrement())
+  nombreCompleto   String   @map("nombre_completo") @db.VarChar(200)
+  tipoDocumento    String   @map("tipo_documento") @db.VarChar(20)
+  numeroDocumento  String   @map("numero_documento") @db.VarChar(50)
+  direccion        String?
+  telefono         String?  @db.VarChar(20)
+  correo           String?  @db.VarChar(100)
+  departamentoId   Int?     @map("departamento_id")
+  municipioId      Int?     @map("municipio_id")
+  tenantId         Int?     @map("tenant_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  departamento CatDepartamento? @relation("EmpleadoDepartamento", fields: [departamentoId], references: [id], onDelete: SetNull)
+  municipio    CatMunicipio?    @relation("EmpleadoMunicipio", fields: [municipioId], references: [id], onDelete: SetNull)
+  tenant       Tenant?          @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@map("empleados")
+}
+
+model Producto {
+  id          Int      @id @default(autoincrement())
+  nombre      String   @db.VarChar(200)
+  categoriaId Int?     @map("categoria_id")
+  imagenUrl   String?  @map("imagen_url") @db.VarChar(500)
+  stockMinimo Decimal  @default(0) @map("stock_minimo") @db.Decimal(12, 3)
+  tenantId    Int?     @map("tenant_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  categoria       Categoria?             @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
+  tenant          Tenant?                @relation(fields: [tenantId], references: [id])
+  inventario      Inventario[]
+  compraDetalles  CompraDetalle[]
+  facturaDetalles FacturaDetalle[]
+  movimientos     MovimientoInventario[]
+
+  @@index([categoriaId])
+  @@index([tenantId])
+  @@map("productos")
+}
+
+// ══════════════════════════════════════════════════════════
+// COMPRAS
+// ══════════════════════════════════════════════════════════
+
+model Compra {
+  id          Int      @id @default(autoincrement())
+  ordenCompra String   @map("orden_compra") @db.VarChar(50)
+  proveedorId Int      @map("proveedor_id")
+  fechaCompra DateTime @map("fecha_compra") @db.Date
+  estado      String   @default("recibida") @db.VarChar(20)
+  total       Decimal  @default(0) @db.Decimal(12, 2)
+  notas       String?
+  tenantId    Int?     @map("tenant_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  proveedor   Proveedor       @relation(fields: [proveedorId], references: [id], onDelete: Restrict)
+  tenant      Tenant?         @relation(fields: [tenantId], references: [id])
+  detalles    CompraDetalle[]
+  inventarios Inventario[]    @relation("CompraInventario")
+
+  @@unique([tenantId, ordenCompra])
+  @@index([tenantId])
+  @@map("compras")
+}
+
+model CompraDetalle {
+  id               Int       @id @default(autoincrement())
+  compraId         Int       @map("compra_id")
+  productoId       Int       @map("producto_id")
+  cantidad         Decimal   @db.Decimal(12, 3)
+  lote             String?   @db.VarChar(100)
+  fechaVencimiento DateTime? @map("fecha_vencimiento") @db.Date
+  precioUnitario   Decimal   @map("precio_unitario") @db.Decimal(12, 2)
+  subtotal         Decimal   @db.Decimal(12, 2)
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  compra   Compra   @relation(fields: [compraId], references: [id], onDelete: Cascade)
+  producto Producto @relation(fields: [productoId], references: [id], onDelete: Restrict)
+
+  @@index([compraId])
+  @@map("compra_detalle")
+}
+
+// ══════════════════════════════════════════════════════════
+// INVENTARIO
+// ══════════════════════════════════════════════════════════
+
+model Inventario {
+  id               Int       @id @default(autoincrement())
+  productoId       Int       @map("producto_id")
+  lote             String?   @db.VarChar(100)
+  fechaVencimiento DateTime? @map("fecha_vencimiento") @db.Date
+  cantidad         Decimal   @default(0) @db.Decimal(12, 3)
+  precioUnitario   Decimal   @default(0) @map("precio_unitario") @db.Decimal(12, 2)
+  ultimaCompraId   Int?      @map("ultima_compra_id")
+  tenantId         Int?      @map("tenant_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  producto     Producto   @relation(fields: [productoId], references: [id], onDelete: Restrict)
+  ultimaCompra Compra?    @relation("CompraInventario", fields: [ultimaCompraId], references: [id], onDelete: SetNull)
+  tenant       Tenant?    @relation(fields: [tenantId], references: [id])
+  facturas     FacturaDetalle[]
+  movimientos  MovimientoInventario[]
+
+  @@index([productoId, lote])
+  @@index([productoId])
+  @@index([tenantId])
+  @@map("inventario")
+}
+
+model MovimientoInventario {
+  id           Int      @id @default(autoincrement())
+  productoId   Int      @map("producto_id")
+  inventarioId Int?     @map("inventario_id")
+  tipo         String   @db.VarChar(30)
+  cantidad     Decimal  @db.Decimal(12, 3)
+  motivo       String?
+  usuarioId    Int?     @map("usuario_id")
+  tenantId     Int      @map("tenant_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  producto   Producto    @relation(fields: [productoId], references: [id], onDelete: Restrict)
+  inventario Inventario? @relation(fields: [inventarioId], references: [id], onDelete: SetNull)
+  usuario    Usuario?    @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
+
+  @@index([productoId, tenantId, createdAt(sort: Desc)])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("movimientos_inventario")
+}
+
+// ══════════════════════════════════════════════════════════
+// SUCURSALES Y PUNTOS DE VENTA
+// ══════════════════════════════════════════════════════════
+
+model Sucursal {
+  id             Int      @id @default(autoincrement())
+  nombre         String   @db.VarChar(200)
+  codigo         String   @db.VarChar(10)
+  codigoMh       String?  @map("codigo_mh") @db.VarChar(10)
+  direccion      String?
+  departamentoId Int?     @map("departamento_id")
+  municipioId    Int?     @map("municipio_id")
+  telefono       String?  @db.VarChar(30)
+  correo         String?  @db.VarChar(100)
+  activo         Boolean  @default(true)
+  tenantId       Int?     @map("tenant_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  departamento CatDepartamento? @relation("SucursalDepartamento", fields: [departamentoId], references: [id], onDelete: SetNull)
+  municipio    CatMunicipio?    @relation("SucursalMunicipio", fields: [municipioId], references: [id], onDelete: SetNull)
+  tenant       Tenant?          @relation(fields: [tenantId], references: [id])
+  puntosVenta  PuntoVenta[]
+
+  @@unique([tenantId, codigo])
+  @@map("sucursales")
+}
+
+model PuntoVenta {
+  id         Int      @id @default(autoincrement())
+  sucursalId Int      @map("sucursal_id")
+  nombre     String   @db.VarChar(200)
+  codigo     String   @db.VarChar(10)
+  codigoMh   String?  @map("codigo_mh") @db.VarChar(10)
+  activo     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  sucursal    Sucursal     @relation(fields: [sucursalId], references: [id], onDelete: Cascade)
+  numeros     NumeroDte[]
+  facturas    Factura[]
+
+  @@unique([sucursalId, codigo])
+  @@map("puntos_venta")
+}
+
+model NumeroDte {
+  id           Int      @id @default(autoincrement())
+  tipoDte      String   @map("tipo_dte") @db.VarChar(10)
+  numeroActual BigInt   @default(0) @map("numero_actual")
+  prefijo      String   @default("M001P001") @db.VarChar(50)
+  puntoVentaId Int?     @map("punto_venta_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  puntoVenta PuntoVenta? @relation(fields: [puntoVentaId], references: [id], onDelete: Cascade)
+
+  @@unique([tipoDte, puntoVentaId])
+  @@map("numeros_dte")
+}
+
+// ══════════════════════════════════════════════════════════
+// FACTURACIÓN / DTEs
+// ══════════════════════════════════════════════════════════
+
+model Factura {
+  id                 Int       @id @default(autoincrement())
+  numeroDte          String    @map("numero_dte") @db.VarChar(50)
+  tipoDte            String    @map("tipo_dte") @db.VarChar(10)
+  clienteId          Int?      @map("cliente_id")
+  receptorNombre     String?   @map("receptor_nombre") @db.VarChar(200)
+  receptorCorreo     String?   @map("receptor_correo") @db.VarChar(200)
+  fechaEmision       DateTime  @map("fecha_emision") @db.Date
+  fechaVencimiento   DateTime? @map("fecha_vencimiento") @db.Date
+  estado             String    @default("borrador") @db.VarChar(20)
+  subtotal           Decimal   @default(0) @db.Decimal(15, 2)
+  iva                Decimal   @default(0) @db.Decimal(15, 2)
+  total              Decimal   @default(0) @db.Decimal(15, 2)
+  retencionRenta     Decimal?  @default(0) @map("retencion_renta") @db.Decimal(12, 2)
+  metodoPago         String?   @default("efectivo") @map("metodo_pago") @db.VarChar(20)
+  notas              String?
+  jsonDtePath        String?   @map("json_dte_path") @db.VarChar(255)
+  jsonPdfPath        String?   @map("json_pdf_path") @db.VarChar(255)
+  codigoGeneracion   String?   @map("codigo_generacion") @db.VarChar(40)
+  ambiente           String?   @default("00") @db.VarChar(5)
+  docRelacionadoId   Int?      @map("doc_relacionado_id")
+  condicionOperacion Int?      @default(1) @map("condicion_operacion")
+  puntoVentaId       Int?      @map("punto_venta_id")
+  tenantId           Int?      @map("tenant_id")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  cliente        Cliente?         @relation(fields: [clienteId], references: [id], onDelete: Restrict)
+  docRelacionado Factura?         @relation("FacturaRelacionada", fields: [docRelacionadoId], references: [id], onDelete: SetNull)
+  facturasPadre  Factura[]        @relation("FacturaRelacionada")
+  puntoVenta     PuntoVenta?      @relation(fields: [puntoVentaId], references: [id], onDelete: SetNull)
+  tenant         Tenant?          @relation(fields: [tenantId], references: [id])
+  detalles       FacturaDetalle[]
+
+  @@unique([tenantId, numeroDte])
+  @@index([clienteId])
+  @@index([estado])
+  @@index([fechaEmision(sort: Desc)])
+  @@index([tenantId])
+  @@map("facturas")
+}
+
+model FacturaDetalle {
+  id               Int      @id @default(autoincrement())
+  facturaId        Int      @map("factura_id")
+  productoId       Int      @map("producto_id")
+  cantidad         Decimal  @default(0) @db.Decimal(12, 3)
+  precioUnitario   Decimal  @default(0) @map("precio_unitario") @db.Decimal(12, 2)
+  ivaUnitario      Decimal  @default(0) @map("iva_unitario") @db.Decimal(12, 2)
+  subtotal         Decimal  @default(0) @db.Decimal(15, 2)
+  totalLinea       Decimal  @default(0) @map("total_linea") @db.Decimal(15, 2)
+  tipoItem         Int?     @default(1) @map("tipo_item")
+  unidadMedida     Int?     @default(59) @map("unidad_medida")
+  descuento        Decimal? @default(0) @db.Decimal(12, 2)
+  ventaGravada     Decimal? @default(0) @map("venta_gravada") @db.Decimal(15, 2)
+  ventaExenta      Decimal? @default(0) @map("venta_exenta") @db.Decimal(15, 2)
+  loteInventarioId Int?     @map("lote_inventario_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  factura        Factura     @relation(fields: [facturaId], references: [id], onDelete: Cascade)
+  producto       Producto    @relation(fields: [productoId], references: [id], onDelete: Restrict)
+  loteInventario Inventario? @relation(fields: [loteInventarioId], references: [id], onDelete: SetNull)
+
+  @@index([facturaId])
+  @@index([productoId])
+  @@map("factura_detalles")
+}
+
+// ══════════════════════════════════════════════════════════
+// USUARIOS POR TENANT
+// ══════════════════════════════════════════════════════════
+
+model Usuario {
+  id           Int      @id @default(autoincrement())
+  nombre       String   @db.VarChar(100)
+  username     String   @db.VarChar(50)
+  passwordHash String   @map("password_hash") @db.VarChar(200)
+  rol          String   @default("user") @db.VarChar(20)
+  activo       Boolean  @default(true)
+  tenantId     Int?     @map("tenant_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant      Tenant?                @relation(fields: [tenantId], references: [id])
+  movimientos MovimientoInventario[]
+
+  @@unique([tenantId, username])
+  @@map("usuarios")
+}

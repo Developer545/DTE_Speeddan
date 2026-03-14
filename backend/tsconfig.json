@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "module": "commonjs",
+    "module": "CommonJS",
     "lib": [
       "ES2020"
     ],
@@ -13,8 +13,7 @@
     "resolveJsonModule": true,
     "declaration": true,
     "sourceMap": true,
-    "noEmitOnError": false,
-    "moduleResolution": "node16"
+    "noEmitOnError": false
   },
   "include": [
     "src/**/*"

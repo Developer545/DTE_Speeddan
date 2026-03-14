@@ -9,7 +9,7 @@
  *   const clientes = await prisma.cliente.findMany({ where: { tenantId: 1 } })
  */
 
-import { PrismaClient } from '../generated/prisma'
+import { PrismaClient } from '../generated/prisma/client'
 
 // Singleton global (evita duplicados en dev con hot-reload)
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }

@@ -19,6 +19,9 @@ import { logAudit, AUDIT_ACCIONES } from '../../utils/audit';
 
 const SA_COOKIE_NAME = 'erp_superadmin_token';
 const COOKIE_MAX_AGE = 8 * 60 * 60 * 1000; // 8 horas en ms
+// SameSite=None + Secure requerido en producción para cookies cross-domain (Vercel→Render)
+const IS_PROD = process.env.NODE_ENV === 'production';
+const COOKIE_OPTS = { sameSite: (IS_PROD ? 'none' : 'lax') as 'none' | 'lax', secure: IS_PROD };
 
 // ── Autenticación ─────────────────────────────────────────────────────────────
 
@@ -43,7 +46,7 @@ export async function postLogin(
 
     // Sin 2FA → flujo directo, establecer cookie de sesión
     const token = authService.signSuperAdminToken(payload);
-    res.cookie(SA_COOKIE_NAME, token, { httpOnly: true, sameSite: 'lax', maxAge: COOKIE_MAX_AGE });
+    res.cookie(SA_COOKIE_NAME, token, { httpOnly: true, ...COOKIE_OPTS, maxAge: COOKIE_MAX_AGE });
     await logAudit({ actorId: payload.id, actorTipo: 'superadmin', accion: AUDIT_ACCIONES.LOGIN_SUPERADMIN, ip: req.ip });
 
     res.json(payload);
@@ -86,7 +89,7 @@ export async function postLogin2FAVerify(
     const sessionPayload = await authService.getSuperAdminById(tokenPayload.sub);
     const token          = authService.signSuperAdminToken(sessionPayload);
 
-    res.cookie(SA_COOKIE_NAME, token, { httpOnly: true, sameSite: 'lax', maxAge: COOKIE_MAX_AGE });
+    res.cookie(SA_COOKIE_NAME, token, { httpOnly: true, ...COOKIE_OPTS, maxAge: COOKIE_MAX_AGE });
     await logAudit({ actorId: sessionPayload.id, actorTipo: 'superadmin', accion: AUDIT_ACCIONES.LOGIN_SUPERADMIN, ip: req.ip });
 
     res.json(sessionPayload);

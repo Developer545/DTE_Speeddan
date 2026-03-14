@@ -12,6 +12,9 @@ import * as svc from '../services/auth.service';
 
 const COOKIE_NAME    = 'erp_token';
 const COOKIE_MAX_AGE = 8 * 60 * 60 * 1000; // 8 horas en ms
+// SameSite=None + Secure requerido en producción para cookies cross-domain (Vercel→Render)
+const IS_PROD = process.env.NODE_ENV === 'production';
+const COOKIE_OPTS = { sameSite: (IS_PROD ? 'none' : 'lax') as 'none' | 'lax', secure: IS_PROD };
 
 /**
  * GET /api/auth/tenant/:slug
@@ -44,7 +47,7 @@ export async function postLogin(req: Request, res: Response, next: NextFunction)
 
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
-      sameSite: 'lax',
+      ...COOKIE_OPTS,
       maxAge:   COOKIE_MAX_AGE,
     });
 
@@ -83,7 +86,7 @@ export async function postImpersonateLogin(req: Request, res: Response): Promise
     // Colocar el token como cookie — dura lo que quede de los 15 minutos
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
-      sameSite: 'lax',
+      ...COOKIE_OPTS,
       maxAge:   15 * 60 * 1000,
     });
 

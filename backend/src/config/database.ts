@@ -17,6 +17,8 @@ export const pool = new Pool({
   max:                   10,
   idleTimeoutMillis:     30000,
   connectionTimeoutMillis: 2000,
+  // Neon (y cualquier PG en produccion) requiere SSL
+  ssl: env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 });
 
 /**

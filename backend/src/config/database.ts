@@ -1,4 +1,4 @@
-/**
+﻿/**
  * database.ts — Pool de conexiones PostgreSQL compartido.
  * Exporta initializeDatabase() que crea las tablas si no existen.
  * Se llama una vez al arrancar el servidor.
@@ -630,7 +630,9 @@ export async function initializeDatabase(): Promise<void> {
       );
     `);
     await client.query(`
-      INSERT INTO configuracion_empresa DEFAULT VALUES ON CONFLICT DO NOTHING;
+      INSERT INTO configuracion_empresa (nombre_negocio)
+      SELECT 'Mi Empresa'
+      WHERE NOT EXISTS (SELECT 1 FROM configuracion_empresa);
     `);
     // Columna logo_url agregada posteriormente — se añade si no existe
     await client.query(`
@@ -1015,7 +1017,7 @@ export async function initializeDatabase(): Promise<void> {
         END,
         url_auth, url_transmision, usuario_api, password_api, token_activo, token_expira_en
       FROM configuracion_api_mh WHERE id = 1
-      ON CONFLICT (tenant_id) DO NOTHING;
+      ON CONFLICT DO NOTHING;
     `);
 
     // ── Tabla tenant_firma ────────────────────────────────────────────────────
@@ -1047,7 +1049,7 @@ export async function initializeDatabase(): Promise<void> {
       INSERT INTO tenant_firma (tenant_id, archivo_nombre, certificado_path, certificado_pass, nit_certificado, fecha_vencimiento)
       SELECT 1, NULL, certificado_path, certificado_pass, nit_certificado, fecha_vencimiento
       FROM configuracion_firma WHERE id = 1
-      ON CONFLICT (tenant_id) DO NOTHING;
+      ON CONFLICT DO NOTHING;
     `);
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1119,13 +1121,25 @@ export async function initializeDatabase(): Promise<void> {
 
     // configuracion_empresa — remover singleton id=1, convertir a por-tenant
     await client.query(`ALTER TABLE configuracion_empresa ADD COLUMN IF NOT EXISTS tenant_id INT REFERENCES tenants(id);`);
-    // Si ya existe una fila con tenant_id=1 (migración previa), eliminar filas huérfanas NULL para evitar conflicto de unicidad
+    // Limpiar filas con tenant_id=NULL que hayan quedado de arranques fallidos
+    // Paso A: Si existe tenant_id=1, borrar todas las filas NULL
     await client.query(`
       DELETE FROM configuracion_empresa
       WHERE tenant_id IS NULL
         AND EXISTS (SELECT 1 FROM configuracion_empresa WHERE tenant_id = 1)
     `);
-    await client.query(`UPDATE configuracion_empresa SET tenant_id = 1 WHERE tenant_id IS NULL;`);
+    // Paso B: Si hay múltiples filas NULL, eliminar duplicados (dejar solo la de menor id)
+    await client.query(`
+      DELETE FROM configuracion_empresa
+      WHERE tenant_id IS NULL
+        AND id != (SELECT MIN(id) FROM configuracion_empresa WHERE tenant_id IS NULL)
+    `);
+    // Paso C: Asignar tenant_id=1 al único NULL restante (solo si no existe ya tenant_id=1)
+    await client.query(`
+      UPDATE configuracion_empresa SET tenant_id = 1
+      WHERE tenant_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM configuracion_empresa WHERE tenant_id = 1)
+    `);
     await client.query(`ALTER TABLE configuracion_empresa DROP CONSTRAINT IF EXISTS configuracion_empresa_id_check;`);
     await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_conf_empresa_tenant ON configuracion_empresa (tenant_id);`);
     // Convertir id a secuencia auto-increment (era DEFAULT 1, causaba conflictos de PK en tenants 2+)
@@ -1147,7 +1161,7 @@ export async function initializeDatabase(): Promise<void> {
       WHERE NOT EXISTS (
         SELECT 1 FROM configuracion_empresa ce WHERE ce.tenant_id = t.id
       )
-      ON CONFLICT (tenant_id) DO NOTHING
+      ON CONFLICT DO NOTHING
     `);
 
     // configuracion_tema — remover singleton id=1, convertir a por-tenant

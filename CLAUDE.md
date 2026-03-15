@@ -9,11 +9,11 @@ Incluye panel SuperAdmin SaaS separado en `/superadmin`.
 ### ERP Cliente (producción)
 - URL login: `https://dte-speeddan.vercel.app/login`
 - Paso 1 — Código de empresa: `principal`
-- Paso 2 — Usuario: `admin` | Contraseña: `admin123`
+- Paso 2 — usuario/contraseña: ver MEMORY.md local
 
 ### Panel SuperAdmin (producción)
 - URL: `https://dte-speeddan.vercel.app/superadmin/login`
-- Usuario: `superadmin` | Contraseña: `Admin@DTE2024!`
+- Credenciales: ver MEMORY.md local
 
 ### Desarrollo local
 - Frontend: `http://localhost:3000`

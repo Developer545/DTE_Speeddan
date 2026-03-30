@@ -58,7 +58,9 @@ app.use(compression());
 const ALLOWED_ORIGINS = [
   'http://localhost:3000',
   'http://localhost:3001',
+  'http://localhost:3100',  // speeddan-control dev
   'https://dte-speeddan.vercel.app',
+  'https://speeddan-control.vercel.app',
   // Permite previews de Vercel (*.vercel.app) durante desarrollo
   /\.vercel\.app$/,
 ];

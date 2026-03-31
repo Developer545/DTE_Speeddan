@@ -15,6 +15,8 @@ interface EnvConfig {
   JWT_SECRET:            string;
   /** Secreto independiente para tokens de superadmin — separado del ERP normal */
   SUPERADMIN_JWT_SECRET: string;
+  /** Clave opcional para autenticar llamadas server-to-server al superadmin */
+  SUPERADMIN_API_KEY?:   string;
   /** Clave AES-256 (32 chars) para cifrar passwords de firma y API MH */
   ENCRYPTION_KEY:        string;
   /** Días de gracia después del vencimiento antes de suspender automáticamente */
@@ -37,6 +39,7 @@ export const env: EnvConfig = {
   NODE_ENV:              process.env.NODE_ENV || 'development',
   JWT_SECRET:            requireEnv('JWT_SECRET'),
   SUPERADMIN_JWT_SECRET: requireEnv('SUPERADMIN_JWT_SECRET'),
+  SUPERADMIN_API_KEY:    process.env.SUPERADMIN_API_KEY || undefined,
   ENCRYPTION_KEY:        requireEnv('ENCRYPTION_KEY'),
   GRACE_PERIOD_DAYS:     parseInt(process.env.GRACE_PERIOD_DAYS || '3', 10),
 };

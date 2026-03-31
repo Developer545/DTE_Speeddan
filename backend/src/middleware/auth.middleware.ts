@@ -8,6 +8,7 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env';
 
@@ -39,6 +40,32 @@ declare global {
 
 const ERP_COOKIE        = 'erp_token';
 const SUPERADMIN_COOKIE = 'erp_superadmin_token';
+const SUPERADMIN_API_KEY_SUBJECT: SuperAdminJwtPayload = {
+  id: 0,
+  username: 'panel-v3',
+  nombre: 'Panel V3',
+};
+
+function getBearerToken(req: Request): string | null {
+  const header = req.headers.authorization;
+  if (!header) return null;
+
+  const [scheme, token] = header.split(' ');
+  if (scheme !== 'Bearer' || !token) return null;
+
+  return token.trim();
+}
+
+function isMatchingApiKey(token: string): boolean {
+  if (!env.SUPERADMIN_API_KEY) {
+    return false;
+  }
+
+  const expected = Buffer.from(env.SUPERADMIN_API_KEY);
+  const received = Buffer.from(token);
+
+  return expected.length === received.length && crypto.timingSafeEqual(expected, received);
+}
 
 /** Verifica el JWT del ERP (tenants). Inyecta req.user con tenantId. */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
@@ -71,6 +98,19 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
  * Completamente independiente del sistema de tenants.
  */
 export function requireSuperAdmin(req: Request, res: Response, next: NextFunction): void {
+  const bearerToken = getBearerToken(req);
+
+  if (bearerToken && env.SUPERADMIN_API_KEY) {
+    if (isMatchingApiKey(bearerToken)) {
+      req.superAdmin = SUPERADMIN_API_KEY_SUBJECT;
+      next();
+      return;
+    }
+
+    res.status(401).json({ message: 'Token de superadmin invalido' });
+    return;
+  }
+
   const token: string | undefined = req.cookies?.[SUPERADMIN_COOKIE];
 
   if (!token) {
